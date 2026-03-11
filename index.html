@@ -850,7 +850,7 @@ function toggleSound() {
 // ==================== 語音系統 ====================
 let currentUtterance = null;
 
-function speak(text, rate = 1.1, pitch = 1.0) {
+function speak(text, rate = 1.0, pitch = 1.1) {
   if (!soundEnabled) return;
   if (currentUtterance) window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
@@ -859,8 +859,29 @@ function speak(text, rate = 1.1, pitch = 1.0) {
   utterance.pitch = pitch;
   utterance.volume = 1;
   const voices = window.speechSynthesis.getVoices();
-  const zhVoice = voices.find(v => v.lang.includes('zh') || v.lang.includes('TW'));
-  if (zhVoice) utterance.voice = zhVoice;
+  // 優先選擇台灣中文女聲
+  const preferredVoices = [
+    'Mei-Jia', 'Meijia', '美佳',           // macOS/iOS 台灣女聲
+    'Google 國語（台灣）',                  // Chrome 台灣女聲
+    'Microsoft Hanhan', 'Hanhan',          // Windows 台灣女聲
+    'zh-TW-HsiaoChenNeural',               // Azure 台灣女聲
+    'Ting-Ting', 'Tingting',               // 中文女聲備選
+  ];
+  let selectedVoice = null;
+  // 先找偏好的女聲
+  for (const pref of preferredVoices) {
+    selectedVoice = voices.find(v => v.name.includes(pref));
+    if (selectedVoice) break;
+  }
+  // 如果沒找到，找任何台灣中文語音
+  if (!selectedVoice) {
+    selectedVoice = voices.find(v => v.lang === 'zh-TW');
+  }
+  // 最後備選：任何中文語音
+  if (!selectedVoice) {
+    selectedVoice = voices.find(v => v.lang.includes('zh'));
+  }
+  if (selectedVoice) utterance.voice = selectedVoice;
   currentUtterance = utterance;
   window.speechSynthesis.speak(utterance);
 }
