@@ -847,46 +847,125 @@ function toggleSound() {
   if (!soundEnabled) stopBGM();
 }
 
-// ==================== 語音系統 ====================
+// ==================== 語音系統（手機優化版）====================
 let currentUtterance = null;
+let voicesLoaded = false;
+let cachedVoice = null;
 
-function speak(text, rate = 1.0, pitch = 1.1) {
-  if (!soundEnabled) return;
-  if (currentUtterance) window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = 'zh-TW';
-  utterance.rate = rate;
-  utterance.pitch = pitch;
-  utterance.volume = 1;
+// 偵測是否為手機
+const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+// 取得最佳語音
+function getBestVoice() {
+  if (cachedVoice) return cachedVoice;
+  
   const voices = window.speechSynthesis.getVoices();
-  // 優先選擇台灣中文女聲
+  if (voices.length === 0) return null;
+  
+  // 優先選擇清晰的女聲（按優先順序）
   const preferredVoices = [
-    'Mei-Jia', 'Meijia', '美佳',           // macOS/iOS 台灣女聲
-    'Google 國語（台灣）',                  // Chrome 台灣女聲
-    'Microsoft Hanhan', 'Hanhan',          // Windows 台灣女聲
-    'zh-TW-HsiaoChenNeural',               // Azure 台灣女聲
-    'Ting-Ting', 'Tingting',               // 中文女聲備選
+    // iOS/macOS 台灣女聲（最清晰）
+    'Mei-Jia', 'Meijia',
+    // Android/Chrome 台灣女聲
+    'Google 國語（台灣）', 'cmn-TW', 'zh-TW',
+    // Windows 台灣女聲
+    'Microsoft Hanhan', 'Hanhan',
+    // 中國女聲備選
+    'Ting-Ting', 'Tingting', 'Lili',
   ];
+  
   let selectedVoice = null;
+  
   // 先找偏好的女聲
   for (const pref of preferredVoices) {
-    selectedVoice = voices.find(v => v.name.includes(pref));
+    selectedVoice = voices.find(v => 
+      v.name.includes(pref) || v.voiceURI.includes(pref)
+    );
     if (selectedVoice) break;
   }
-  // 如果沒找到，找任何台灣中文語音
+  
+  // 找台灣中文語音
   if (!selectedVoice) {
     selectedVoice = voices.find(v => v.lang === 'zh-TW');
   }
-  // 最後備選：任何中文語音
+  
+  // 找任何中文語音（偏好女聲）
   if (!selectedVoice) {
-    selectedVoice = voices.find(v => v.lang.includes('zh'));
+    const zhVoices = voices.filter(v => v.lang.includes('zh'));
+    // 嘗試找女聲（通常名字有 female 或不含 male）
+    selectedVoice = zhVoices.find(v => 
+      v.name.toLowerCase().includes('female') || 
+      !v.name.toLowerCase().includes('male')
+    ) || zhVoices[0];
   }
-  if (selectedVoice) utterance.voice = selectedVoice;
-  currentUtterance = utterance;
-  window.speechSynthesis.speak(utterance);
+  
+  cachedVoice = selectedVoice;
+  console.log('選擇的語音:', selectedVoice?.name, selectedVoice?.lang);
+  return selectedVoice;
 }
 
-window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+// 語音播放函數（支援 Promise）
+function speak(text, rate = null, pitch = null) {
+  return new Promise((resolve) => {
+    if (!soundEnabled) { resolve(); return; }
+    
+    // 取消正在播放的語音
+    window.speechSynthesis.cancel();
+    
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'zh-TW';
+    
+    // 手機用較慢語速，桌機稍快
+    utterance.rate = rate ?? (isMobile ? 0.85 : 0.95);
+    utterance.pitch = pitch ?? (isMobile ? 1.15 : 1.1);
+    utterance.volume = 1;
+    
+    const voice = getBestVoice();
+    if (voice) utterance.voice = voice;
+    
+    utterance.onend = () => resolve();
+    utterance.onerror = () => resolve();
+    
+    currentUtterance = utterance;
+    
+    // iOS 需要特殊處理
+    if (isIOS) {
+      // iOS 有時需要小延遲
+      setTimeout(() => {
+        window.speechSynthesis.speak(utterance);
+      }, 100);
+    } else {
+      window.speechSynthesis.speak(utterance);
+    }
+    
+    // 安全超時（避免語音卡住）
+    setTimeout(resolve, 8000);
+  });
+}
+
+// 預載語音
+function preloadVoices() {
+  return new Promise((resolve) => {
+    const voices = window.speechSynthesis.getVoices();
+    if (voices.length > 0) {
+      voicesLoaded = true;
+      getBestVoice();
+      resolve();
+    } else {
+      window.speechSynthesis.onvoiceschanged = () => {
+        voicesLoaded = true;
+        getBestVoice();
+        resolve();
+      };
+      // 安全超時
+      setTimeout(resolve, 2000);
+    }
+  });
+}
+
+// 頁面載入時預載語音
+preloadVoices();
 
 // ==================== 吐槽語錄（超多變化版）====================
 const correctRoasts = [
@@ -1239,8 +1318,8 @@ function startGame() {
   gameQuestions = shuffle(questionBank).slice(0, TOTAL_QUESTIONS).map(shuffleOptions);
   
   setTimeout(() => {
-    speak("歡迎來到國教盟知識王！準備好了嗎？開始囉！", 1.1, 1.05);
-  }, 200);
+    speak("歡迎來到國教盟知識王！準備好了嗎？開始囉！");
+  }, 300);
   
   document.getElementById('startScreen').classList.add('hidden');
   document.getElementById('gameScreen').style.display = 'flex';
@@ -1312,7 +1391,7 @@ function showQuestion() {
     }
     
     if (timeLeft === 5 && !answered) {
-      speak("快一點！", 1.3, 1.2);
+      speak("快一點！");
     }
     
     if (timeLeft <= 0) {
@@ -1364,7 +1443,7 @@ function showCombo(num) {
   document.body.appendChild(comboEl);
   setTimeout(() => comboEl.remove(), 1000);
   
-  speak(comboData.voice, 1.2, 1.2);
+  speak(comboData.voice);
   showStarBurst();
 }
 
@@ -1414,14 +1493,15 @@ function revealAnswer(selected) {
     const r = getUniqueRoast(correctRoasts, usedCorrectRoasts);
     roast = r.text;
     showFlash('success');
-    setTimeout(() => speak("答對了！" + r.voice, 1.15, 1.1), 300);
+    // 手機版較慢語速，節奏延遲稍長
+    setTimeout(() => speak("答對了！" + r.voice), 500);
   } else if (isTimeout) {
     icon = '⏰';
     text = '時間到！';
     const r = timeoutRoasts[Math.floor(Math.random() * timeoutRoasts.length)];
     roast = r.text;
     showFlash('warning');
-    setTimeout(() => speak(r.voice, 1.1, 0.9), 300);
+    setTimeout(() => speak(r.voice), 500);
   } else {
     icon = '❌';
     text = '答錯了！';
@@ -1429,7 +1509,7 @@ function revealAnswer(selected) {
     roast = r.text;
     showFlash('wrong');
     shakeScreen();
-    setTimeout(() => speak("答錯了！" + r.voice, 1.1, 0.95), 300);
+    setTimeout(() => speak("答錯了！" + r.voice), 500);
   }
   
   document.getElementById('revealIcon').textContent = icon;
@@ -1514,7 +1594,7 @@ function showEndScreen() {
   document.getElementById('endIcon').textContent = icon;
   document.getElementById('endMessage').textContent = message;
   
-  setTimeout(() => speak(`挑戰完成！你答對了 ${score} 題！` + voice, 1.05, 1.0), 500);
+  setTimeout(() => speak(`挑戰完成！你答對了 ${score} 題！` + voice), 700);
   
   if (pct >= 0.6) launchConfetti();
 }
